@@ -13,14 +13,14 @@ import { LPFeeLibrary } from "v4-core/src/libraries/LPFeeLibrary.sol";
 import { StateLibrary } from "v4-core/src/libraries/StateLibrary.sol";
 import { TestERC20 } from "../TestToken.sol";
 
-import { PulseFeeNTickHook } from "../../src/PulseFeeNTickHook.sol";
-import { PulseFeeNTickErrors } from "../../src/lib/PulseFeeNTickErrors.sol";
+import { PulseV4Hook } from "../../src/PulseV4Hook.sol";
+import { PulseV4HookErrors } from "../../src/lib/PulseV4HookErrors.sol";
 import { KeeperRewardToken } from "../../src/KeeperRewardToken.sol";
 import { HookMiner } from "../../script/HookMiner.sol";
 
-/// @notice Integration tests for PulseFeeNTickHook.
+/// @notice Integration tests for PulseV4Hook.
 ///         Inherits Deployers to get a fresh PoolManager and helper utilities.
-contract PulseFeeNTickHookTest is Test, Deployers {
+contract PulseV4HookTest is Test, Deployers {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
     using CurrencyLibrary for Currency;
@@ -36,7 +36,7 @@ contract PulseFeeNTickHookTest is Test, Deployers {
     uint256 constant FEE_REFRESH_COOLDOWN_SECONDS = 60;
 
     // --- State ---
-    PulseFeeNTickHook hook;
+    PulseV4Hook hook;
     PoolKey poolKey;
     TestERC20 token0;
     TestERC20 token1;
@@ -53,7 +53,7 @@ contract PulseFeeNTickHookTest is Test, Deployers {
         if (address(token0) > address(token1)) (token0, token1) = (token1, token0);
 
         // Mine hook address
-        bytes memory creationCode = type(PulseFeeNTickHook).creationCode;
+        bytes memory creationCode = type(PulseV4Hook).creationCode;
         bytes memory constructorArgs = abi.encode(
             manager,
             address(this),
@@ -74,7 +74,7 @@ contract PulseFeeNTickHookTest is Test, Deployers {
         }
         assertEq(deployed, hookAddr, "CREATE2 address mismatch");
 
-        hook = PulseFeeNTickHook(deployed);
+        hook = PulseV4Hook(deployed);
 
         // Deploy KeeperRewardToken and fund the hook
         KeeperRewardToken rewardToken = new KeeperRewardToken();
@@ -132,13 +132,13 @@ contract PulseFeeNTickHookTest is Test, Deployers {
 
     function test_deposit_revertsWhenPaused() public {
         hook.setPaused(true);
-        vm.expectRevert(PulseFeeNTickErrors.ContractPaused.selector);
+        vm.expectRevert(PulseV4HookErrors.ContractPaused.selector);
         vm.prank(alice);
         hook.deposit(poolKey, 1e18, 1e18, alice);
     }
 
     function test_deposit_zeroAmountReverts() public {
-        vm.expectRevert(PulseFeeNTickErrors.ZeroShares.selector);
+        vm.expectRevert(PulseV4HookErrors.ZeroShares.selector);
         vm.prank(alice);
         hook.deposit(poolKey, 0, 0, alice);
     }
@@ -180,7 +180,7 @@ contract PulseFeeNTickHookTest is Test, Deployers {
         vm.prank(alice);
         uint256 tokenId = hook.deposit(poolKey, 1e18, 1e18, alice);
 
-        vm.expectRevert(PulseFeeNTickErrors.NotTokenOwner.selector);
+        vm.expectRevert(PulseV4HookErrors.NotTokenOwner.selector);
         hook.withdraw(poolKey, tokenId, alice); // called by test contract, not alice
     }
 
@@ -206,7 +206,7 @@ contract PulseFeeNTickHookTest is Test, Deployers {
         vm.prank(keeper);
         hook.pokeFee(poolKey);
 
-        vm.expectRevert(PulseFeeNTickErrors.FeeRefreshTooSoon.selector);
+        vm.expectRevert(PulseV4HookErrors.FeeRefreshTooSoon.selector);
         vm.prank(keeper);
         hook.pokeFee(poolKey);
     }

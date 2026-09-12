@@ -9,16 +9,16 @@ import { StateLibrary } from "v4-core/src/libraries/StateLibrary.sol";
 
 import { VolumeDecayLib } from "./lib/VolumeDecayLib.sol";
 import { TickLib } from "./lib/TickLib.sol";
-import { PulseFeeNTickErrors } from "./lib/PulseFeeNTickErrors.sol";
-import { PulseFeeNTickEvents } from "./lib/PulseFeeNTickEvents.sol";
+import { PulseV4HookErrors } from "./lib/PulseV4HookErrors.sol";
+import { PulseV4HookEvents } from "./lib/PulseV4HookEvents.sol";
 import { HookConstants } from "./lib/HookConstants.sol";
 
 /// @title FeeModule
-/// @notice Fee computation logic for PulseFeeNTickHook. Designed to be called via delegatecall.
+/// @notice Fee computation logic for PulseV4Hook. Designed to be called via delegatecall.
 /// @dev Storage must match the main hook's storage layout for state variables it accesses.
 contract FeeModule {
     // Events (re-export for fee module)
-    using PulseFeeNTickEvents for bytes32;
+    using PulseV4HookEvents for bytes32;
     using StateLibrary for IPoolManager;
 
     using HookConstants for *;
@@ -61,14 +61,14 @@ contract FeeModule {
     function refreshFee(PoolKey calldata key) public returns (uint24) {
         PoolId id = key.toId();
         if (uint48(block.timestamp) < lastFeeRefreshTime[id] + HookConstants.FEE_REFRESH_COOLDOWN) {
-            revert PulseFeeNTickErrors.FeeRefreshTooSoon();
+            revert PulseV4HookErrors.FeeRefreshTooSoon();
         }
 
         uint24 newFee = _computeFee(id, key.tickSpacing);
         cachedFee[id] = newFee;
         lastFeeRefreshTime[id] = uint48(block.timestamp);
 
-        emit PulseFeeNTickEvents.FeeRefreshed(msg.sender, newFee);
+        emit PulseV4HookEvents.FeeRefreshed(msg.sender, newFee);
         return newFee;
     }
 
@@ -125,6 +125,6 @@ contract FeeModule {
             tickVolumeTimestamp[id][tick] = now_;
         }
 
-        emit PulseFeeNTickEvents.VolumeUpdated(msg.sender, newVolume);
+        emit PulseV4HookEvents.VolumeUpdated(msg.sender, newVolume);
     }
 }

@@ -2,11 +2,11 @@
 pragma solidity ^0.8.26;
 
 /// @title VaultReceiptNFT
-/// @notice Minimal ERC721 receipt for PulseFeeNTickHook vault positions.
+/// @notice Minimal ERC721 receipt for PulseV4Hook vault positions.
 ///         Each token represents an amount of vault shares. Only the HOOK can mint/burn.
 contract VaultReceiptNFT {
-    string public constant NAME = "PulseFeeNTick Vault Position";
-    string public constant SYMBOL = "PFNT-VP";
+    string public constant NAME = "PulseV4 Vault Position";
+    string public constant SYMBOL = "PV4-VP";
 
     // --- ERC721 core storage ---
     mapping(uint256 => address) private _owners;

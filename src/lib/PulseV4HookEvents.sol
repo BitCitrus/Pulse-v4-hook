@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-/// @title PulseFeeNTickEvents
-/// @notice Event definitions for PulseFeeNTickHook and related contracts.
-library PulseFeeNTickEvents {
+/// @title PulseV4HookEvents
+/// @notice Event definitions for PulseV4Hook and related contracts.
+library PulseV4HookEvents {
     event NeedsRebalanceSet(int24 oldTick, int24 newTick);
     event VaultDeposit(
         address indexed depositor,

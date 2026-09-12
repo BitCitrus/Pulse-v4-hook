@@ -8,7 +8,7 @@ pragma solidity ^0.8.26;
 library HookMiner {
     /// @notice Find a CREATE2 salt such that the resulting hook address satisfies the permission flags.
     /// @param deployer     The CREATE2 factory / deployer address (typically address(this) in a script)
-    /// @param flags        Required lower-14-bit mask (e.g. 0x10C4 for PulseFeeNTickHook)
+    /// @param flags        Required lower-14-bit mask (e.g. 0x10C4 for PulseV4Hook)
     /// @param creationCode The contract's creation code (type(Hook).creationCode)
     /// @param constructorArgs ABI-encoded constructor arguments
     /// @param startNonce   Starting nonce for the search loop

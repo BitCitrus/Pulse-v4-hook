@@ -24,7 +24,7 @@ library HookConstants {
     bytes32 public constant INTERNAL_SWAP_SENTINEL =
         0x0101010101010101010101010101010101010101010101010101010101010101;
 
-    /// @notice Required flags for PulseFeeNTickHook:
+    /// @notice Required flags for PulseV4Hook:
     uint160 public constant REQUIRED = 0x10C4;
 
     uint256 public constant BEFORE_INITIALIZE_FLAG = 1 << 0;

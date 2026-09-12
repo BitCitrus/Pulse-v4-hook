@@ -1,6 +1,6 @@
-# PulseFeeNTick-hook
+# Pulse-v4-hook
 
-PulseFeeNTick-hook is a Uniswap v4 hook project that combines two core ideas in a single pool strategy:
+Pulse-v4-hook is a Uniswap v4 hook project that combines two core ideas in a single pool strategy:
 
 1. **Dynamic LP fee driven by recent local trading activity**
 2. **A hook-managed shared 1-tick liquidity vault**
@@ -34,7 +34,7 @@ A separate rebalance flow then:
 
 ## 2. Naming and design intention
 
-**PulseFeeNTick-hook** reflects two pillars:
+**Pulse-v4-hook** reflects two pillars:
 
 - **PulseFee**: fee is based on recent local trading volume pulses
 - **NTick**: the vault only provides liquidity in one usable tick space at a time
@@ -313,7 +313,7 @@ Likely components include:
 
 The following have already been decided:
 
-- project name: `PulseFeeNTick-hook`
+- project name: `Pulse-v4-hook`
 - dynamic fee based on decayed `L` and decayed usable-tick `L_tick`
 - hourly decay factor = `0.8`
 - center usable tick has double weight

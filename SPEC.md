@@ -1,4 +1,4 @@
-# PulseFeeNTickHook — Technical Specification
+# PulseV4Hook — Technical Specification
 
 ## 1. Hook Address Requirements
 

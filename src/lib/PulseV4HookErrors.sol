@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-/// @title PulseFeeNTickErrors
-/// @notice Error definitions for PulseFeeNTickHook and related contracts.
-library PulseFeeNTickErrors {
+/// @title PulseV4HookErrors
+/// @notice Error definitions for PulseV4Hook and related contracts.
+library PulseV4HookErrors {
     error NotAdmin();
     error NotPoolManager();
     error NotTokenOwner();

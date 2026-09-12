@@ -18,13 +18,13 @@ import { TransientStateLibrary } from "v4-core/src/libraries/TransientStateLibra
 import { VaultReceiptNFT } from "./VaultReceiptNFT.sol";
 import { TickLib } from "./lib/TickLib.sol";
 import { LiquidityAmountsLib } from "./lib/LiquidityAmountsLib.sol";
-import { PulseFeeNTickErrors } from "./lib/PulseFeeNTickErrors.sol";
-import { PulseFeeNTickEvents } from "./lib/PulseFeeNTickEvents.sol";
+import { PulseV4HookErrors } from "./lib/PulseV4HookErrors.sol";
+import { PulseV4HookEvents } from "./lib/PulseV4HookEvents.sol";
 import { HookConstants } from "./lib/HookConstants.sol";
 import { Ownable } from "v4-core/lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import { FeeModule } from "./FeeModule.sol";
 
-/// @title PulseFeeNTickHook
+/// @title PulseV4Hook
 /// @notice Uniswap v4 hook with two intertwined features:
 ///
 ///         1. PULSEFEE — Dynamic LP fee driven by decayed local trading activity.
@@ -45,7 +45,7 @@ import { FeeModule } from "./FeeModule.sol";
 ///      Deploy with CREATE2 using HookMiner to satisfy this constraint.
 import { HookConstants } from "./lib/HookConstants.sol";
 
-contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
+contract PulseV4Hook is IHooks, IUnlockCallback, Ownable, FeeModule {
     using PoolIdLibrary for PoolKey;
     using CurrencyLibrary for Currency;
     using BalanceDeltaLibrary for BalanceDelta;
@@ -96,13 +96,13 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
     bool public paused;
 
     modifier whenNotPaused() {
-        if (paused) revert PulseFeeNTickErrors.ContractPaused();
+        if (paused) revert PulseV4HookErrors.ContractPaused();
         _;
     }
 
     //  EVENTS & ERRORS (using library)
-    // Events are defined in PulseFeeNTickEvents library
-    // Errors are defined in PulseFeeNTickErrors library
+    // Events are defined in PulseV4HookEvents library
+    // Errors are defined in PulseV4HookErrors library
 
     constructor(
         IPoolManager _poolManager,
@@ -162,10 +162,10 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         returns (bytes4)
     {
         if (msg.sender != address(POOL_MANAGER)) {
-            revert PulseFeeNTickErrors.NotPoolManager();
+            revert PulseV4HookErrors.NotPoolManager();
         }
         PoolId id = key.toId();
-        if (initialized[id]) revert PulseFeeNTickErrors.AlreadyInitialized();
+        if (initialized[id]) revert PulseV4HookErrors.AlreadyInitialized();
         initialized[id] = true;
         cachedFee[id] = MIN_FEE;
         lastFeeRefreshTime[id] = uint48(block.timestamp);
@@ -222,10 +222,10 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         bytes calldata hookData
     ) external returns (bytes4, BeforeSwapDelta, uint24) {
         if (msg.sender != address(POOL_MANAGER)) {
-            revert PulseFeeNTickErrors.NotPoolManager();
+            revert PulseV4HookErrors.NotPoolManager();
         }
         PoolId id = key.toId();
-        if (!initialized[id]) revert PulseFeeNTickErrors.NotInitialized();
+        if (!initialized[id]) revert PulseV4HookErrors.NotInitialized();
 
         // Internal rebalance: MIN_FEE to prevent fee manipulation, no hook delta
         if (_isInternalSwap(hookData)) {
@@ -260,10 +260,10 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         bytes calldata hookData
     ) external whenNotPaused returns (bytes4, int128) {
         if (msg.sender != address(POOL_MANAGER)) {
-            revert PulseFeeNTickErrors.NotPoolManager();
+            revert PulseV4HookErrors.NotPoolManager();
         }
         PoolId id = key.toId();
-        if (!initialized[id]) revert PulseFeeNTickErrors.NotInitialized();
+        if (!initialized[id]) revert PulseV4HookErrors.NotInitialized();
 
         // Skip for internal rebalance swaps
         if (_isInternalSwap(hookData)) {
@@ -309,7 +309,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
             } else {
                 protocolRevenue1[id] += hookFee;
             }
-            emit PulseFeeNTickEvents.ProtocolFeeCollected(
+            emit PulseV4HookEvents.ProtocolFeeCollected(
                 unspecifiedCurrency == key.currency0, hookFee
             );
         }
@@ -327,7 +327,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
                     && usableTick != vaultTickLower[id]
             ) {
                 needsRebalance[id] = true;
-                emit PulseFeeNTickEvents.NeedsRebalanceSet(vaultTickLower[id], usableTick);
+                emit PulseV4HookEvents.NeedsRebalanceSet(vaultTickLower[id], usableTick);
             }
         }
 
@@ -357,7 +357,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
 
     function unlockCallback(bytes calldata data) external returns (bytes memory) {
         if (msg.sender != address(POOL_MANAGER)) {
-            revert PulseFeeNTickErrors.NotPoolManager();
+            revert PulseV4HookErrors.NotPoolManager();
         }
         uint8 action = uint8(data[0]);
         bytes calldata payload = data[1:];
@@ -365,7 +365,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         if (action == ACTION_DEPOSIT) return _handleDeposit(payload);
         if (action == ACTION_WITHDRAW) return _handleWithdraw(payload);
         if (action == ACTION_REBALANCE) return _handleRebalance(payload);
-        revert("PulseFeeNTick: unknown action");
+        revert("PulseV4Hook: unknown action");
     }
 
     // =========================================================================
@@ -389,7 +389,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         address recipient
     ) external whenNotPaused returns (uint256 tokenId) {
         PoolId id = key.toId();
-        if (!initialized[id]) revert PulseFeeNTickErrors.NotInitialized();
+        if (!initialized[id]) revert PulseV4HookErrors.NotInitialized();
         bytes memory result = POOL_MANAGER.unlock(
             abi.encodePacked(
                 ACTION_DEPOSIT,
@@ -408,13 +408,13 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         whenNotPaused
     {
         PoolId id = key.toId();
-        if (!initialized[id]) revert PulseFeeNTickErrors.NotInitialized();
+        if (!initialized[id]) revert PulseV4HookErrors.NotInitialized();
         if (RECEIPT_NFT.ownerOf(tokenId) != msg.sender) {
-            revert PulseFeeNTickErrors.NotTokenOwner();
+            revert PulseV4HookErrors.NotTokenOwner();
         }
         // Verify the token belongs to this pool
         if (PoolId.unwrap(depositPoolId[tokenId]) != PoolId.unwrap(id)) {
-            revert PulseFeeNTickErrors.WrongPool();
+            revert PulseV4HookErrors.WrongPool();
         }
         POOL_MANAGER.unlock(
             abi.encodePacked(ACTION_WITHDRAW, abi.encode(id, key, tokenId, recipient))
@@ -425,7 +425,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
     /// @param key Pool to rebalance
     function rebalance(PoolKey calldata key) external whenNotPaused {
         PoolId id = key.toId();
-        if (!initialized[id]) revert PulseFeeNTickErrors.NotInitialized();
+        if (!initialized[id]) revert PulseV4HookErrors.NotInitialized();
         if (!needsRebalance[id]) return;
         POOL_MANAGER.unlock(
             abi.encodePacked(ACTION_REBALANCE, abi.encode(id, key, msg.sender))
@@ -440,26 +440,26 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         external
         whenNotPaused
     {
-        if (!initialized[key.toId()]) revert PulseFeeNTickErrors.NotInitialized();
+        if (!initialized[key.toId()]) revert PulseV4HookErrors.NotInitialized();
         super.updateVolume(key, volumeAmount);
         _disperseKeeperReward(msg.sender);
-        emit PulseFeeNTickEvents.VolumeUpdated(msg.sender, volumeAmount);
+        emit PulseV4HookEvents.VolumeUpdated(msg.sender, volumeAmount);
     }
 
     /// @notice Keeper function: refresh the cached dynamic fee. Rate-limited.
     /// @param key Pool to refresh fee for
     function pokeFee(PoolKey calldata key) external whenNotPaused {
         PoolId id = key.toId();
-        if (!initialized[id]) revert PulseFeeNTickErrors.NotInitialized();
+        if (!initialized[id]) revert PulseV4HookErrors.NotInitialized();
         if (uint48(block.timestamp) < lastFeeRefreshTime[id] + HookConstants.FEE_REFRESH_COOLDOWN) {
-            revert PulseFeeNTickErrors.FeeRefreshTooSoon();
+            revert PulseV4HookErrors.FeeRefreshTooSoon();
         }
 
         uint24 newFee = super.computeFee(key);
         cachedFee[id] = newFee;
         lastFeeRefreshTime[id] = uint48(block.timestamp);
         _disperseKeeperReward(msg.sender);
-        emit PulseFeeNTickEvents.FeeRefreshed(msg.sender, newFee);
+        emit PulseV4HookEvents.FeeRefreshed(msg.sender, newFee);
     }
 
     // =========================================================================
@@ -468,7 +468,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
 
     function setPaused(bool _paused) external onlyOwner {
         paused = _paused;
-        emit PulseFeeNTickEvents.Paused(_paused);
+        emit PulseV4HookEvents.Paused(_paused);
     }
 
     /// @notice Set the keeper reward token after deployment
@@ -531,7 +531,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         // Strict: must rebalance before deposit
         if (needsRebalance[id]) {
             bool ok = _doRebalance(id, key, address(0));
-            if (!ok) revert PulseFeeNTickErrors.RebalanceFailed();
+            if (!ok) revert PulseV4HookErrors.RebalanceFailed();
         }
 
         // Current active range
@@ -555,7 +555,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         uint128 liquidity = LiquidityAmountsLib.getLiquidityForAmounts(
             sqrtPrice, sqrtPriceLower, sqrtPriceUpper, bal0, bal1
         );
-        if (liquidity == 0) revert PulseFeeNTickErrors.ZeroShares();
+        if (liquidity == 0) revert PulseV4HookErrors.ZeroShares();
 
         // Exact token amounts needed for this liquidity (should match what we have)
         (uint256 amount0, uint256 amount1) = LiquidityAmountsLib.getAmountsForLiquidity(
@@ -590,7 +590,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         depositPoolId[tokenId] = id;
         RECEIPT_NFT.mint(recipient, tokenId, sharesToMint);
 
-        emit PulseFeeNTickEvents.VaultDeposit(
+        emit PulseV4HookEvents.VaultDeposit(
             depositor, tokenId, sharesToMint, amount0, amount1
         );
         return abi.encode(tokenId);
@@ -601,7 +601,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
             abi.decode(payload, (PoolId, PoolKey, uint256, address));
 
         uint256 userShares = RECEIPT_NFT.shares(tokenId);
-        if (userShares == 0) revert PulseFeeNTickErrors.ZeroShares();
+        if (userShares == 0) revert PulseV4HookErrors.ZeroShares();
         uint256 totalShares_ = totalVaultShares[id];
 
         // Lenient rebalance attempt
@@ -654,7 +654,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         totalVaultShares[id] -= userShares;
         RECEIPT_NFT.burn(tokenId);
 
-        emit PulseFeeNTickEvents.VaultWithdraw(
+        emit PulseV4HookEvents.VaultWithdraw(
             recipient, tokenId, userShares, idleShare0, idleShare1
         );
         return "";
@@ -664,7 +664,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
         (PoolId id, PoolKey memory key, address keeper) =
             abi.decode(payload, (PoolId, PoolKey, address));
         bool ok = _doRebalance(id, key, keeper);
-        if (!ok) revert PulseFeeNTickErrors.RebalanceFailed();
+        if (!ok) revert PulseV4HookErrors.RebalanceFailed();
         return "";
     }
 
@@ -769,13 +769,13 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
             idleToken0[id] = uint256(uint128(addDelta.amount0()));
             POOL_MANAGER.take(key.currency0, address(this), idleToken0[id]);
         } else if (addDelta.amount0() < 0) {
-            revert PulseFeeNTickErrors.InsufficientInventory();
+            revert PulseV4HookErrors.InsufficientInventory();
         }
         if (addDelta.amount1() > 0) {
             idleToken1[id] = uint256(uint128(addDelta.amount1()));
             POOL_MANAGER.take(key.currency1, address(this), idleToken1[id]);
         } else if (addDelta.amount1() < 0) {
-            revert PulseFeeNTickErrors.InsufficientInventory();
+            revert PulseV4HookErrors.InsufficientInventory();
         }
 
         // Update vault state
@@ -785,7 +785,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
 
         if (keeper != address(0)) _disperseKeeperReward(keeper);
 
-        emit PulseFeeNTickEvents.VaultRebalanced(keeper, newTickLower, newLiquidity);
+        emit PulseV4HookEvents.VaultRebalanced(keeper, newTickLower, newLiquidity);
         return true;
     }
 
@@ -893,7 +893,7 @@ contract PulseFeeNTickHook is IHooks, IUnlockCallback, Ownable, FeeModule {
             .call(abi.encodeWithSelector(0x23b872dd, from, address(this), amount));
         require(
             ok && (ret.length == 0 || abi.decode(ret, (bool))),
-            "PulseFeeNTick: transferFrom failed"
+            "PulseV4Hook: transferFrom failed"
         );
     }
 

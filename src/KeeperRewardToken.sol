@@ -6,8 +6,8 @@ import { IERC20Minimal } from "v4-core/src/interfaces/external/IERC20Minimal.sol
 /// @title KeeperRewardToken
 /// @notice ERC20 token for keeper rewards. All supply minted to deployer at deployment.
 contract KeeperRewardToken is IERC20Minimal {
-    string public constant NAME = "PulseFeeNTick Keeper Reward";
-    string public constant SYMBOL = "PFNT-KR";
+    string public constant NAME = "PulseV4 Keeper Reward";
+    string public constant SYMBOL = "PV4-KR";
 
     uint256 public constant TOTAL_SUPPLY = 1e18 * 1e6; // 1 million tokens (1e6 * 1e18)
 

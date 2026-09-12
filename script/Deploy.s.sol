@@ -7,12 +7,12 @@ import { PoolKey } from "v4-core/src/types/PoolKey.sol";
 import { Currency } from "v4-core/src/types/Currency.sol";
 import { LPFeeLibrary } from "v4-core/src/libraries/LPFeeLibrary.sol";
 
-import { PulseFeeNTickHook } from "../src/PulseFeeNTickHook.sol";
+import { PulseV4Hook } from "../src/PulseV4Hook.sol";
 import { VaultReceiptNFT } from "../src/VaultReceiptNFT.sol";
 import { KeeperRewardToken } from "../src/KeeperRewardToken.sol";
 import { HookMiner } from "./HookMiner.sol";
 
-/// @notice Deploy PulseFeeNTickHook, KeeperRewardToken, and create the associated Uniswap v4 pool.
+/// @notice Deploy PulseV4Hook, KeeperRewardToken, and create the associated Uniswap v4 pool.
 ///
 /// Step 1: Deploy hook + NFT
 /// Step 2: Deploy KeeperRewardToken (minted to deployer)
@@ -27,7 +27,7 @@ import { HookMiner } from "./HookMiner.sol";
 ///   PRIVATE_KEY, POOL_MANAGER_ADDRESS, ADMIN_ADDRESS, MIN_FEE, MAX_FEE, FEE_CONSTANT_C,
 ///   BASE_TOKEN_IS_TOKEN0, TOKEN0_ADDRESS, TOKEN1_ADDRESS, TICK_SPACING, INITIAL_SQRT_PRICE
 contract DeployScript is Script {
-    /// @dev Required hook address flags for PulseFeeNTickHook:
+    /// @dev Required hook address flags for PulseV4Hook:
     ///      AFTER_INITIALIZE(1<<12) | BEFORE_SWAP(1<<7) | AFTER_SWAP(1<<6) | AFTER_SWAP_RETURNS_DELTA(1<<2)
     uint160 public constant REQUIRED_FLAGS = 0x10C4;
 
@@ -55,7 +55,7 @@ contract DeployScript is Script {
         if (token0 > token1) (token0, token1) = (token1, token0);
 
         // --- Mine hook address ---
-        bytes memory creationCode = type(PulseFeeNTickHook).creationCode;
+        bytes memory creationCode = type(PulseV4Hook).creationCode;
         bytes memory constructorArgs =
             abi.encode(poolManager, admin_, baseIsToken0, minFee_, maxFee_, feeC);
 
@@ -75,12 +75,12 @@ contract DeployScript is Script {
         }
         require(deployed == hookAddress, "Deploy: address mismatch");
 
-        PulseFeeNTickHook hook = PulseFeeNTickHook(deployed);
+        PulseV4Hook hook = PulseV4Hook(deployed);
         VaultReceiptNFT nft = hook.RECEIPT_NFT();
 
         console2.log("");
         console2.log("--- Step 1: Hook + NFT Deployed ---");
-        console2.log("PulseFeeNTickHook:", address(hook));
+        console2.log("PulseV4Hook:", address(hook));
         console2.log("VaultReceiptNFT:", address(nft));
 
         // --- Step 2: Deploy KeeperRewardToken (minted to deployer) ---
