@@ -2,19 +2,21 @@
 pragma solidity ^0.8.26;
 
 /// @title VolumeDecayLib
-/// @notice Exponential decay for trading volume: 0.8x per full hour elapsed.
+/// @notice Exponential decay for trading volume: 0.5x per full hour elapsed.
 ///         Decay is applied lazily (at read/write time) using binary exponentiation in Q96 fixed point.
 library VolumeDecayLib {
-    /// @dev 0.8^90 < 1e-8; beyond this cap volume is effectively zero.
+    /// @dev Explicitly discard volume after 90 hours, even if a large counter would still
+    ///      have a nonzero integer remainder under mathematical exponential decay.
     uint256 internal constant DECAY_HOURS_CAP = 90;
 
-    /// @dev floor(0.8 * 2^96) = 0.8 in Q96
-    uint256 internal constant DECAY_BASE_Q96 = 63382530011411470074835160268;
+    /// @dev 0.5 * 2^96 = 2^95, exact in Q96. Half-life is therefore exactly one hour:
+    ///      the fee reads roughly the last 3-6 hours of trading and little before that.
+    uint256 internal constant DECAY_BASE_Q96 = 39614081257132168796771975168;
 
     /// @dev 2^96
     uint256 internal constant Q96 = 1 << 96;
 
-    /// @notice Apply hourly exponential decay (0.8 per hour) to a volume value.
+    /// @notice Apply hourly exponential decay (0.5 per hour) to a volume value.
     /// @param value           Current stored volume
     /// @param lastTimestamp   Unix timestamp (seconds) of the last update
     /// @param currentTimestamp Current unix timestamp (seconds)
@@ -31,7 +33,7 @@ library VolumeDecayLib {
         if (hoursElapsed == 0) return value;
         if (hoursElapsed >= DECAY_HOURS_CAP) return 0;
 
-        // Binary exponentiation: 0.8^hoursElapsed in Q96
+        // Binary exponentiation: 0.5^hoursElapsed in Q96
         uint256 factor = _powQ96(DECAY_BASE_Q96, hoursElapsed);
         return uint128((uint256(value) * factor) >> 96);
     }

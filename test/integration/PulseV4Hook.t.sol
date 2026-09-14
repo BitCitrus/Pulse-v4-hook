@@ -7,230 +7,228 @@ import { Test } from "forge-std/Test.sol";
 import { Deployers } from "v4-core/test/utils/Deployers.sol";
 import { IPoolManager } from "v4-core/src/interfaces/IPoolManager.sol";
 import { PoolKey } from "v4-core/src/types/PoolKey.sol";
-import { PoolIdLibrary } from "v4-core/src/types/PoolId.sol";
+import { PoolId, PoolIdLibrary } from "v4-core/src/types/PoolId.sol";
 import { Currency, CurrencyLibrary } from "v4-core/src/types/Currency.sol";
+import { BalanceDelta, BalanceDeltaLibrary } from "v4-core/src/types/BalanceDelta.sol";
 import { LPFeeLibrary } from "v4-core/src/libraries/LPFeeLibrary.sol";
 import { StateLibrary } from "v4-core/src/libraries/StateLibrary.sol";
 import { TestERC20 } from "../TestToken.sol";
 
 import { PulseV4Hook } from "../../src/PulseV4Hook.sol";
 import { PulseV4HookErrors } from "../../src/lib/PulseV4HookErrors.sol";
-import { KeeperRewardToken } from "../../src/KeeperRewardToken.sol";
+import { HookConstants } from "../../src/lib/HookConstants.sol";
 import { HookMiner } from "../../script/HookMiner.sol";
 
-/// @notice Integration tests for PulseV4Hook.
-///         Inherits Deployers to get a fresh PoolManager and helper utilities.
-contract PulseV4HookTest is Test, Deployers {
+import { PulseV4HookFixture } from "../utils/PulseV4HookFixture.sol";
+
+contract PulseV4HookTest is PulseV4HookFixture {
     using PoolIdLibrary for PoolKey;
     using StateLibrary for IPoolManager;
     using CurrencyLibrary for Currency;
+    using BalanceDeltaLibrary for BalanceDelta;
 
-    // --- Hook address flags ---
-    uint160 constant FLAGS = 0x10C4;
-
-    // --- Constants ---
-    int24 constant TICK_SPACING = 60;
-    uint24 constant MIN_FEE = 500;
-    uint24 constant MAX_FEE = 10_000;
-    uint256 constant FEE_C = 3_000;
-    uint256 constant FEE_REFRESH_COOLDOWN_SECONDS = 60;
-
-    // --- State ---
-    PulseV4Hook hook;
-    PoolKey poolKey;
-    TestERC20 token0;
-    TestERC20 token1;
-    address alice = makeAddr("alice");
-    address keeper = makeAddr("keeper");
-
-    function setUp() public {
-        // Deploy PoolManager via Deployers helper
-        deployFreshManager();
-
-        // Deploy tokens (sorted)
-        token0 = new TestERC20("Token0", "T0", 18, 1e24);
-        token1 = new TestERC20("Token1", "T1", 18, 1e24);
-        if (address(token0) > address(token1)) (token0, token1) = (token1, token0);
-
-        // Mine hook address
-        bytes memory creationCode = type(PulseV4Hook).creationCode;
-        bytes memory constructorArgs = abi.encode(
-            manager,
-            address(this),
-            true,
-            /*baseIsToken0*/
-            MIN_FEE,
-            MAX_FEE,
-            FEE_C
-        );
-        (address hookAddr, bytes32 salt) =
-            HookMiner.find(address(this), FLAGS, creationCode, constructorArgs, 0);
-
-        // Deploy hook at mined address via CREATE2
-        bytes memory bytecode = abi.encodePacked(creationCode, constructorArgs);
-        address deployed;
-        assembly {
-            deployed := create2(0, add(bytecode, 0x20), mload(bytecode), salt)
-        }
-        assertEq(deployed, hookAddr, "CREATE2 address mismatch");
-
-        hook = PulseV4Hook(deployed);
-
-        // Deploy KeeperRewardToken and fund the hook
-        KeeperRewardToken rewardToken = new KeeperRewardToken();
-        rewardToken.transfer(address(hook), 1e24); // Give hook plenty of reward tokens
-        hook.setKeeperRewardToken(address(rewardToken));
-
-        // Build pool poolKey (DYNAMIC_FEE_FLAG required for hook fee override)
-        poolKey = PoolKey({
-            currency0: Currency.wrap(address(token0)),
-            currency1: Currency.wrap(address(token1)),
-            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
-            tickSpacing: TICK_SPACING,
-            hooks: hook
-        });
-
-        // Initialize pool at 1:1 price
-        manager.initialize(poolKey, SQRT_PRICE_1_1);
-
-        // Fund alice and keeper
-        token0.mint(alice, 1e24);
-        token1.mint(alice, 1e24);
-        vm.startPrank(alice);
-        token0.approve(address(hook), type(uint256).max);
-        token1.approve(address(hook), type(uint256).max);
-        vm.stopPrank();
-    }
-
-    // =========================================================================
     // Basic pool setup
-    // =========================================================================
 
     function test_hookInitialized() public view {
         assertEq(address(hook.POOL_MANAGER()), address(manager));
-        assertFalse(hook.needsRebalance(poolKey.toId()));
+        assertTrue(hook.initialized(poolKey.toId()));
         assertEq(hook.cachedFee(poolKey.toId()), MIN_FEE);
-    }
-
-    function test_receiptNFTDeployed() public view {
-        assertFalse(address(hook.RECEIPT_NFT()) == address(0));
     }
 
     // =========================================================================
     // Vault deposit
     // =========================================================================
 
-    function test_deposit_mintsNFT() public {
-        vm.prank(alice);
-        uint256 tokenId = hook.deposit(poolKey, 1e18, 1e18, alice);
-
-        assertEq(hook.RECEIPT_NFT().ownerOf(tokenId), alice);
-        assertGt(hook.RECEIPT_NFT().shares(tokenId), 0);
-        assertGt(hook.totalVaultShares(poolKey.toId()), 0);
-        assertGt(hook.vaultActiveLiquidity(poolKey.toId()), 0);
-    }
-
-    function test_deposit_revertsWhenPaused() public {
-        hook.setPaused(true);
-        vm.expectRevert(PulseV4HookErrors.ContractPaused.selector);
-        vm.prank(alice);
-        hook.deposit(poolKey, 1e18, 1e18, alice);
-    }
-
-    function test_deposit_zeroAmountReverts() public {
-        vm.expectRevert(PulseV4HookErrors.ZeroShares.selector);
-        vm.prank(alice);
-        hook.deposit(poolKey, 0, 0, alice);
-    }
-
-    function test_secondDeposit_sharesProportional() public {
-        vm.prank(alice);
-        uint256 id1 = hook.deposit(poolKey, 1e18, 1e18, alice);
-        uint256 shares1 = hook.RECEIPT_NFT().shares(id1);
-
-        vm.prank(alice);
-        uint256 id2 = hook.deposit(poolKey, 1e18, 1e18, alice);
-        uint256 shares2 = hook.RECEIPT_NFT().shares(id2);
-
-        // Second deposit is roughly equal (same price, same range) — within 1%
-        assertApproxEqRel(shares1, shares2, 0.01e18);
-    }
-
     // =========================================================================
     // Vault withdraw
     // =========================================================================
-
-    function test_withdraw_burnNFTAndReceiveTokens() public {
-        vm.prank(alice);
-        uint256 tokenId = hook.deposit(poolKey, 1e18, 1e18, alice);
-
-        uint256 before0 = token0.balanceOf(alice);
-        uint256 before1 = token1.balanceOf(alice);
-
-        vm.prank(alice);
-        hook.withdraw(poolKey, tokenId, alice);
-
-        // Tokens returned (minus any trading fees/slippage)
-        assertGt(token0.balanceOf(alice) + token1.balanceOf(alice), before0 + before1);
-        // NFT burned - verify by checking balanceOf alice in NFT (should be 0)
-        assertEq(hook.RECEIPT_NFT().balanceOf(alice), 0);
-    }
-
-    function test_withdraw_revertsIfNotOwner() public {
-        vm.prank(alice);
-        uint256 tokenId = hook.deposit(poolKey, 1e18, 1e18, alice);
-
-        vm.expectRevert(PulseV4HookErrors.NotTokenOwner.selector);
-        hook.withdraw(poolKey, tokenId, alice); // called by test contract, not alice
-    }
 
     // =========================================================================
     // Fee mechanics
     // =========================================================================
 
-    function test_pokeFee_updatesCache() public {
-        // Ensure cooldown has passed
-        skip(FEE_REFRESH_COOLDOWN_SECONDS + 1);
+    /// @notice Nothing has to be poked: the first swap of a block recomputes and caches the
+    ///         fee itself, so every swap pays a fee derived from that block's own state.
+    function test_firstSwapOfBlockRefreshesTheCache() public {
+        _addLiquidity(1e21);
+        PoolId id = poolKey.toId();
+        uint256 initBlock = hook.lastFeeRefreshBlock(id);
 
-        vm.prank(keeper);
-        hook.pokeFee(poolKey);
+        vm.roll(block.number + 1);
+        vm.prank(trader);
+        swap(poolKey, false, -1e16, "");
 
-        // Fee refreshed (might equal minFee or maxFee depending on state)
-        assertLe(hook.cachedFee(poolKey.toId()), MAX_FEE);
-        assertGe(hook.cachedFee(poolKey.toId()), MIN_FEE);
-        assertGt(hook.lastFeeRefreshTime(poolKey.toId()), 0);
+        assertGt(hook.lastFeeRefreshBlock(id), initBlock, "swap must refresh the cache");
+        assertEq(hook.lastFeeRefreshBlock(id), block.number);
+        assertLe(hook.cachedFee(id), MAX_FEE);
+        assertGe(hook.cachedFee(id), MIN_FEE);
     }
 
-    function test_pokeFee_revertsIfTooSoon() public {
-        skip(FEE_REFRESH_COOLDOWN_SECONDS + 1);
-        vm.prank(keeper);
-        hook.pokeFee(poolKey);
+    /// @notice Within one block the fee is frozen after the first swap. That is what stops a
+    ///         trader from reshaping the volume signal mid-block and then trading on the result.
+    function test_feeIsFrozenForTheRestOfTheBlock() public {
+        _addLiquidity(1e21);
+        PoolId id = poolKey.toId();
+        vm.roll(block.number + 1);
 
-        vm.expectRevert(PulseV4HookErrors.FeeRefreshTooSoon.selector);
-        vm.prank(keeper);
-        hook.pokeFee(poolKey);
+        vm.prank(trader);
+        swap(poolKey, false, -1e16, "");
+        uint24 firstFee = hook.cachedFee(id);
+
+        // A large move in the same block shifts the volume signal...
+        vm.prank(trader);
+        swap(poolKey, false, -5e18, "");
+        assertEq(hook.cachedFee(id), firstFee, "fee must not move within a block");
+
+        // ...and is only picked up by the next block's first swap.
+        vm.roll(block.number + 1);
+        vm.prank(trader);
+        swap(poolKey, true, -1e16, "");
+        assertEq(hook.lastFeeRefreshBlock(id), block.number);
+    }
+
+    /// @notice Pausing stops the hook charging its protocol fee, but must never stop the swap:
+    ///         a revert here would brick the pool for every trader and plain Uniswap LP.
+    function test_pausedStopsProtocolFeeButNotSwaps() public {
+        _addLiquidity(1e21);
+        PoolId id = poolKey.toId();
+
+        hook.setPaused(true);
+        vm.roll(block.number + 1);
+        vm.prank(trader);
+        swap(poolKey, false, -1e16, "");
+        assertEq(hook.protocolRevenue0(id), 0, "paused hook must collect nothing");
+        assertEq(hook.protocolRevenue1(id), 0);
+        assertGt(hook.globalVolume(id), 0, "volume accounting keeps running while paused");
+
+        hook.setPaused(false);
+        vm.roll(block.number + 1);
+        vm.prank(trader);
+        swap(poolKey, false, -1e16, "");
+        assertGt(hook.protocolRevenue0(id), 0, "unpausing resumes collection");
+    }
+
+    /// @notice No trading anywhere (fresh pool, nothing has ever moved) carries no
+    ///         adverse-selection signal for LPs and must float to the floor — MAX_FEE is
+    ///         reserved for when trading IS happening but has moved away from the current price
+    ///         (see the cross-range case below), not for silence.
+    function test_computeFee_noVolumeAnywhere_isMinFee_notMaxFee() public view {
+        assertEq(hook.computeFee(poolKey), MIN_FEE);
+    }
+
+    /// @notice A pool that sits idle before its first trade must refresh to the floor, not jump
+    ///         to the ceiling, when beforeSwap recomputes the cache in a later block.
+    function test_swap_afterProlongedInactivity_refreshesToMinFee_notMaxFee() public {
+        PoolId id = poolKey.toId();
+        _addLiquidity(1e21);
+
+        vm.warp(block.timestamp + 121);
+        vm.roll(block.number + 1); // new block forces beforeSwap to recompute; volume still 0
+
+        vm.prank(trader);
+        swap(poolKey, false, -1e16, "");
+
+        assertEq(hook.cachedFee(id), MIN_FEE, "quiet pool should refresh to the floor");
     }
 
     // =========================================================================
-    // Rebalance flag
+    // Real swaps: fee collection + volume accounting
     // =========================================================================
 
-    function test_needsRebalance_setAfterPriceMoves() public {
-        // Deposit into vault
-        vm.prank(alice);
-        hook.deposit(poolKey, 1e18, 1e18, alice);
+    function test_swap_collectsProtocolFeeAndUpdatesVolume() public {
+        _addLiquidity(1e21);
 
-        // Initial state: no rebalance needed
-        assertFalse(hook.needsRebalance(poolKey.toId()));
+        PoolId id = poolKey.toId();
+        assertEq(hook.protocolRevenue0(id), 0);
+        assertEq(hook.globalVolume(id), 0);
 
-        // Do a large swap to move price out of the current tick
-        // (This is a simplified check — actual swap requires router setup)
-        // TODO: wire up a swap router and push price across tick boundary
+        vm.prank(trader);
+        swap(poolKey, false, -1e14, "");
+
+        // Fee is taken from the unspecified (output) side, i.e. token0 for a oneForZero swap
+        assertGt(hook.protocolRevenue0(id), 0);
+        assertEq(hook.protocolRevenue1(id), 0);
+        assertGt(hook.globalVolume(id), 0);
     }
 
-    function test_rebalance_noopWhenFresh() public {
-        // rebalance() is a no-op when needsRebalance == false
-        hook.rebalance(poolKey); // should not revert
+    /// @notice hookData is entirely caller-controlled. There is no value a swapper can put in
+    ///         it that buys an exemption from the protocol fee or from volume accounting — the
+    ///         hook must never branch on it. (An earlier design carried a public "internal swap"
+    ///         sentinel here; anyone could read the constant and replay it.)
+    function test_swap_arbitraryHookDataBuysNoExemption() public {
+        _addLiquidity(1e21);
+        PoolId id = poolKey.toId();
+
+        bytes[3] memory probes = [
+            abi.encode(
+                bytes32(
+                    uint256(0x0101010101010101010101010101010101010101010101010101010101010101)
+                )
+            ),
+            abi.encode(address(hook)),
+            bytes(hex"")
+        ];
+        for (uint256 i; i < probes.length; i++) {
+            uint256 snapshot = vm.snapshotState();
+            vm.prank(trader);
+            swap(poolKey, false, -1e14, probes[i]);
+            assertGt(hook.protocolRevenue0(id), 0, "hookData must not skip the protocol fee");
+            assertGt(hook.globalVolume(id), 0, "hookData must not skip volume tracking");
+            assertTrue(vm.revertToState(snapshot));
+        }
+    }
+
+    function test_swap_extraFee_scalesWithGasPriceRatio() public {
+        _addLiquidity(1e21);
+        PoolId id = poolKey.toId();
+
+        // baseFee == 0 disables the entire hook protocol fee.
+        vm.fee(0);
+        uint256 snapshot = vm.snapshotState();
+        vm.prank(trader);
+        swap(poolKey, false, -1e16, "");
+        uint256 feeAtRatio1 = hook.protocolRevenue0(id);
+
+        // Revert back and replay the identical swap, but with tx.gasprice = 5x block.basefee
+        vm.revertToState(snapshot);
+        vm.fee(10 gwei);
+        vm.txGasPrice(50 gwei);
+        vm.prank(trader);
+        swap(poolKey, false, -1e16, "");
+        uint256 feeAtRatio5 = hook.protocolRevenue0(id);
+
+        assertGt(feeAtRatio5, feeAtRatio1);
+    }
+
+    function test_swap_extraFee_cappedAtMax() public {
+        _addLiquidity(1e21);
+        PoolId id = poolKey.toId();
+
+        // Absurd gas price ratio (1000x) must still clamp to HOOK_FEE_PIPS + MAX_EXTRA_PROTOCOL_FEE_PIPS
+        vm.fee(1 gwei);
+        vm.txGasPrice(1000 gwei);
+        vm.prank(trader);
+        BalanceDelta delta = swap(poolKey, false, -1e17, "");
+
+        uint256 output = uint256(uint128(delta.amount0()));
+        uint256 maxTotalPips = 100 + 3000; // HOOK_FEE_PIPS + MAX_EXTRA_PROTOCOL_FEE_PIPS
+        uint256 maxExpectedFee = (output + hook.protocolRevenue0(id)) * maxTotalPips / 1_000_000;
+
+        assertLe(hook.protocolRevenue0(id), maxExpectedFee + 1); // +1 for rounding
+    }
+
+    function test_swap_noProtocolFeeWhenBaseFeeIsZero() public {
+        // block.basefee == 0 means this isn't a real EIP-1559 fee market — skip the protocol
+        // fee entirely (base 1bp + extra) rather than guess from a meaningless ratio.
+        vm.fee(0);
+        _addLiquidity(1e21);
+        PoolId id = poolKey.toId();
+
+        vm.prank(trader);
+        swap(poolKey, false, -1e16, "");
+
+        assertEq(hook.protocolRevenue0(id), 0);
+        assertEq(hook.protocolRevenue1(id), 0);
     }
 
     // =========================================================================
@@ -272,11 +270,80 @@ contract PulseV4HookTest is Test, Deployers {
         assertLe(computed, MAX_FEE);
     }
 
-    function test_getVaultInfo() public view {
-        (, uint128 al, bool rn, uint256 ts,,) = hook.getVaultInfo(poolKey);
-        // Initially all zero
-        assertEq(al, 0);
-        assertFalse(rn);
-        assertEq(ts, 0);
+    // =========================================================================
+    // Multi-pool: two pools on the same hook sharing a common token
+    // =========================================================================
+
+    /// @notice The hook is designed to serve many pools (everything is PoolId-keyed), and
+    ///         nothing stops two different pools from sharing a token — e.g. one hook serving
+    ///         both a USDC/WETH pool and a USDC/WBTC pool. All prior tests only ever exercised
+    ///         a single pool, so this checks whether one pool's deposit sizing can accidentally
+    ///         treat ANOTHER pool's reserved idle/protocolRevenue (in the shared token) as free
+    ///         balance — the exact same class of bug fixed earlier for the single-pool case,
+    ///         but across a pool boundary instead of within one pool.
+    /// @notice Two pools sharing token0 each accrue protocol revenue in it. The hook holds a
+    ///         single token0 balance covering both, so each pool's entry must stay physically
+    ///         redeemable in full — one pool's withdrawal must never be funded by the other's.
+    function test_multiPool_sharedToken_revenueStaysSeparatelyRedeemable() public {
+        PoolId idA = poolKey.toId();
+        TestERC20 token2 = new TestERC20("Token2", "T2", 18, 1e30);
+        bool token0IsCurrency0InB = address(token0) < address(token2);
+        PoolKey memory poolKeyB = PoolKey({
+            currency0: token0IsCurrency0InB
+                ? Currency.wrap(address(token0))
+                : Currency.wrap(address(token2)),
+            currency1: token0IsCurrency0InB
+                ? Currency.wrap(address(token2))
+                : Currency.wrap(address(token0)),
+            fee: LPFeeLibrary.DYNAMIC_FEE_FLAG,
+            tickSpacing: TICK_SPACING,
+            hooks: hook
+        });
+        manager.initialize(poolKeyB, SQRT_PRICE_1_1);
+        PoolId idB = poolKeyB.toId();
+
+        token2.mint(address(this), 1e24);
+        token2.mint(trader, 1e24);
+        token2.approve(address(modifyLiquidityRouter), type(uint256).max);
+        vm.prank(trader);
+        token2.approve(address(swapRouter), type(uint256).max);
+
+        // Revenue in token0 on pool A.
+        _addLiquidity(1e21);
+        vm.prank(trader);
+        swap(poolKey, false, -5e16, "");
+        uint256 revenueA = hook.protocolRevenue0(idA);
+        assertGt(revenueA, 0, "pool A must accrue token0 revenue");
+
+        // Revenue in token0 on pool B as well.
+        _addLiquidity(poolKeyB, -6000, 6000, 1e21);
+        vm.prank(trader);
+        swap(poolKeyB, !token0IsCurrency0InB, -5e16, "");
+        uint256 revenueB0 = hook.protocolRevenue0(idB);
+        uint256 revenueB1 = hook.protocolRevenue1(idB);
+        assertGt(revenueB0 + revenueB1, 0, "pool B must accrue revenue");
+
+        // The shared token0 claim balance must cover both entries at once.
+        uint256 token0Owed = revenueA + (token0IsCurrency0InB ? revenueB0 : revenueB1);
+        assertEq(manager.balanceOf(address(hook), poolKey.currency0.toId()), token0Owed);
+        assertEq(token0.balanceOf(address(hook)), 0);
+
+        // Draining pool B in full must leave pool A's entry intact and still payable.
+        hook.withdrawProtocolRevenue(poolKeyB, address(this));
+        assertEq(hook.protocolRevenue0(idA), revenueA, "pool A entry must survive");
+        assertEq(manager.balanceOf(address(hook), poolKey.currency0.toId()), revenueA);
+        uint256 before = token0.balanceOf(address(this));
+        hook.withdrawProtocolRevenue(poolKey, address(this));
+        assertEq(
+            token0.balanceOf(address(this)) - before,
+            revenueA,
+            "pool A revenue must still be redeemable in full"
+        );
+        assertEq(hook.protocolRevenue0(idA), 0);
+        assertEq(manager.balanceOf(address(hook), poolKey.currency0.toId()), 0);
     }
+
+    // =========================================================================
+    // Native ETH as currency0
+    // =========================================================================
 }

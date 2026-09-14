@@ -7,7 +7,7 @@ pragma solidity ^0.8.26;
 ///         Used in deployment scripts and tests.
 library HookMiner {
     /// @notice Find a CREATE2 salt such that the resulting hook address satisfies the permission flags.
-    /// @param deployer     The CREATE2 factory / deployer address (typically address(this) in a script)
+    /// @param deployer     The account actually executing CREATE2 (the factory during broadcast)
     /// @param flags        Required lower-14-bit mask (e.g. 0x10C4 for PulseV4Hook)
     /// @param creationCode The contract's creation code (type(Hook).creationCode)
     /// @param constructorArgs ABI-encoded constructor arguments
@@ -43,10 +43,25 @@ library HookMiner {
     {
         return address(
             uint160(
-                uint256(
-                    keccak256(abi.encodePacked(bytes1(0xff), deployer, salt, initcodeHash))
-                )
+                uint256(keccak256(abi.encodePacked(bytes1(0xff), deployer, salt, initcodeHash)))
             )
+        );
+    }
+
+    /// @notice Deploy through the deterministic deployment proxy using salt || initcode.
+    /// @dev Calling the factory explicitly makes the mining and broadcast deployer identical.
+    function deploy(address factory, bytes32 salt, bytes memory initcode)
+        internal
+        returns (address deployed)
+    {
+        require(factory.code.length != 0, "Deploy: CREATE2 factory missing");
+        (bool ok, bytes memory result) = factory.call(abi.encodePacked(salt, initcode));
+        require(ok && result.length == 20, "Deploy: CREATE2 failed");
+        deployed = address(bytes20(result));
+        require(
+            deployed == _computeCreate2Address(factory, salt, keccak256(initcode))
+                && deployed.code.length != 0,
+            "Deploy: address mismatch"
         );
     }
 }
