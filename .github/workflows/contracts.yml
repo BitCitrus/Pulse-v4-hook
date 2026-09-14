@@ -1,0 +1,20 @@
+name: Contracts
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+      - run: forge fmt --check src test script
+      - run: forge build --skip test
+      - run: forge build --sizes --skip test --skip script
+      - run: forge test -vv
