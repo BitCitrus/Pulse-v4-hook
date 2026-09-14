@@ -1,69 +1,67 @@
-# TODO - Pulse-v4-hook
+# 实现状态与后续事项
 
-This file lists the implementation status.
+当前行为以 [SPEC](SPEC.md) 为准,结构说明见[架构说明](docs/refactor.md)。
 
----
+本轮工作的主要结果是**移除金库,把项目收敛为纯动态费率 Hook**。源码缩减为 9 个文件,
+管理入口为 `setPaused` 和 `withdrawProtocolRevenue`(均为 onlyOwner)。这是一次不兼容变更,需要重新部署。
 
-## Completed
+## 已完成
 
-- [x] Initialize project structure for a Uniswap v4 hook repository
-- [x] Decide and set toolchain: Foundry
-- [x] v4-core dependency
-- [x] Create base folders: src/, test/, script/
-- [x] Write SPEC.md
-- [x] Define hook responsibilities
-- [x] Define vault responsibilities (1-tick vault)
-- [x] Define keeper responsibilities
-- [x] Define protocol fee accounting responsibilities
-- [x] Define all storage variables before implementation
-- [x] Define event list
-- [x] Define custom errors
-- [x] Explicitly describe internal rebalance swap flow
-- [x] Explicitly describe how internal swaps are identified so fee exemption is possible
-- [x] Finalize contract split (monolithic hook)
-- [x] NFT-style receipt with share accounting
-- [x] Protocol fee treasury internal to hook
-- [x] Keeper rewards via ERC20 token transfer
-- [x] Implement storage for fee state (cachedFee, lastFeeRefreshTime, minFee, maxFee, C)
-- [x] Implement fee refresh function (pokeFee)
-- [x] Implement storage for global decayed volume L
-- [x] Implement storage for per-usable-tick decayed volume L_tick
-- [x] Store timestamps needed for lazy hourly decay
-- [x] Implement lazy decay math for elapsed whole hours
-- [x] Handle very old stale states safely
-- [x] Implement usable tick normalization helpers (TickLib.toUsableTick)
-- [x] Implement local sum calculation (±7 tick range)
-- [x] Implement dynamic LP fee override path (beforeSwap)
-- [x] Charge extra 1bp hook fee for external user swaps
-- [x] Exempt internal rebalance swaps from extra 1bp
-- [x] Exempt internal rebalance swaps from dynamic LP fee (use MIN_FEE)
-- [x] Update volume accounting in afterSwap
-- [x] Determine final usable tick space after swap
-- [x] If vault active range is stale, set needsRebalance = true
-- [x] Implement shared-vault share accounting
-- [x] Track idle assets and active position assets
-- [x] Implement deposit entrypoint (strict)
-- [x] Implement withdraw entrypoint (lenient)
-- [x] Implement public rebalance() entrypoint
-- [x] Implement protocol revenue tracking
-- [x] Implement keeper reward distribution
-- [x] Implement pause functionality
-- [x] Add full test suite
-- [x] Multi-pool support (mapping by PoolId)
+### 安全修复
 
----
+- [x] 修复暂停开关会让整个池子所有交易 revert 的问题;暂停改为只停收协议费。
+- [x] 费率缓存从 120 秒过期窗口改为**每区块刷新**,消除"先调用者决定他人费率"的操纵窗口。
+- [x] 移除公开 `pokeFee` 入口及其冷却逻辑(每区块自动刷新后已无作用)。
+- [x] 确认没有任何 `hookData` 取值能免除协议费或跳过成交量记账,并加测试固定。
+- [x] **协议费改为铸造 ERC-6909 claim,交换路径上不再出现任何代币转账。**
+      旧写法在 `afterSwap` 里 `take` 真实代币,一个会拒绝转账给 Hook 的代币
+      (USDC/USDT 都能冻结任意地址)会让该池**所有交易全部 revert**。
+      由 [BlacklistingToken.t.sol](test/integration/BlacklistingToken.t.sol) 钉住。
+- [x] 提取路径按 `int128.max` 分块 burn/take,支持超过 int128 上限的累积收入;
+      代币由 PoolManager 直接付给 recipient,Hook 因此不需要 `receive()`。
+- [x] 原生币与 ERC20 协议费统一铸造为 ERC-6909 claim,收费不再依赖 Hook 收款入口。
+- [x] 提现使用 owner 发起的 unlock 回调,分批 burn/take 并直接付给收款人;失败整笔回滚。
 
-## NOT APPLICABLE
+### 移除金库(连带消除整类风险)
 
-- This hook does NOT support standard Uniswap liquidity (only vault LP)
-- This hook does NOT use a separate RebalanceManager module
+- [x] 删除金库状态、结算、再平衡引擎、份额数学、ERC721 凭证、Lens 与库存计划器。
+- [x] 删除 keeper 奖励池、奖励接口与相关部署脚本。
+- [x] Hook 不再调用 `swap`,移除金库结算回调;当前 `IUnlockCallback` 仅用于协议收入兑换。
+- [x] 移除 `ReentrancyGuard`:提现遵循 CEI,PoolManager 拒绝嵌套 unlock,回归验证无法重复领取。
 
----
+移除原因是实测发现金库的再平衡可被在操纵价格上强制换币(单笔交易可套取 TVL 的 2.8%),
+且即便修掉原子套利,维护本身在趋势行情里仍是净亏损。完整数据见[审查记录](REVIEW-2026-09-13.md)。
 
-## Future improvements
+### 文档与配置
 
-- [ ] Gas optimization (if bytecode exceeds 24KB)
-- [ ] Fuzz tests
-- [ ] Economic simulation tests
-- [ ] Security audit
-- [ ] Deploy to mainnet
+- [x] 重写 README、SPEC、架构、部署、测试文档;归档金库与奖励相关历史文档。
+- [x] 清理 `.env.example` 与 `foundry.toml`(移除已无对应测试的 invariant 配置)。
+
+当前本地验证为 **76 项通过、0 失败、0 跳过**,Hook 尺寸 8,051 字节。复现命令见[测试说明](docs/testing.md)。
+
+## 上线前仍需完成
+
+### 已知未修复的行为
+
+- [ ] **决定 `MAX_FEE` 的触发阈值是否合理。** 费率随"窗口占全局成交量的比例"连续上升,
+      当前参数(C=300、MAX_FEE=3000)下,窗口占比跌到约 **1%** 就会贴上 `MAX_FEE`。
+      这不是跳变,但意味着价格走进近期少有成交的区域时诚实交易者被收满额。
+      调整方式是改 `MAX_FEE / C` 的比值,而不是给分母加地板。
+
+- [ ] **费率无法区分良性流与套利流(已实测)。** 同一 tick 上两类交易拿到几乎相同的费率,
+      且噪音流略贵于套利流。这直接架空了"对逆向选择收更高费"这个核心主张。
+      最小修复是让 `_computeFee` 用上 `beforeSwap` 已经收到但被忽略的 `zeroForOne`,
+      按交易方向对成交量桶加权。调衰减率或 tickSpacing 都不能替代。
+
+### 缺失的验证
+
+- [ ] **补齐费率公式的模糊测试。** 现在整个合约的价值都压在 `FeePolicy.dynamicFee` 上,
+      但它只有定点测试:单调性、边界裁剪、以及刷量能把费率推到什么程度都没有模糊覆盖。
+- [ ] 用代表性市场数据校准 `C`、`MIN_FEE`、`MAX_FEE`。注意费率地板趋近 `C / 3`,
+      这是刷量者能压到的实际下限,选 `C` 时必须考虑。
+- [ ] 量化刷量操纵费率的盈亏边界,判断在目标池深度下是否可行。
+- [ ] 在目标链使用实际 PoolManager、币种、CREATE2 工厂和管理员配置模拟部署与集成。
+- [ ] 对最终源码和上线配置完成**独立安全审查**。本轮改动动了费率缓存、协议费收取和暂停语义,
+      自审不能替代外部审计。
+
+本地编译和模拟不代表已完成目标链部署,也不能替代上述经济与安全验证。
