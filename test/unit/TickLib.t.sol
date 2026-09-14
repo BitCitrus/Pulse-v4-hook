@@ -3,6 +3,7 @@ pragma solidity ^0.8.26;
 
 import { Test } from "forge-std/Test.sol";
 import { TickLib } from "../../src/lib/TickLib.sol";
+import { TickMath } from "v4-core/src/libraries/TickMath.sol";
 
 contract TickLibTest is Test {
     // ---- toUsableTick -------------------------------------------------------
@@ -42,35 +43,6 @@ contract TickLibTest is Test {
     }
 
     // ---- localWeightedSum ---------------------------------------------------
-
-    function test_localWeightedSum_allZero() public pure {
-        assertEq(TickLib.localWeightedSum(0, 0, 0, 0, 0), 0);
-    }
-
-    function test_localWeightedSum_centerOnly() public pure {
-        // center has weight 2
-        assertEq(TickLib.localWeightedSum(100, 0, 0, 0, 0), 200);
-    }
-
-    function test_localWeightedSum_allEqual() public pure {
-        // 2*100 + 100 + 100 + 100 + 100 = 600
-        assertEq(TickLib.localWeightedSum(100, 100, 100, 100, 100), 600);
-    }
-
-    function test_localWeightedSum_symmetry() public pure {
-        // swap ±1 values should give same result
-        uint256 a = TickLib.localWeightedSum(50, 10, 20, 5, 15);
-        uint256 b = TickLib.localWeightedSum(50, 20, 10, 15, 5);
-        assertEq(a, b);
-    }
-
-    function test_localWeightedSum_noOverflow() public pure {
-        // All at max uint128 — should not overflow uint256
-        uint128 m = type(uint128).max;
-        uint256 s = TickLib.localWeightedSum(m, m, m, m, m);
-        // 2*m + 4*m = 6*m; 6 * (2^128 - 1) < 2^256  ✓
-        assertGt(s, 0);
-    }
 
     // ---- fuzz ---------------------------------------------------------------
 

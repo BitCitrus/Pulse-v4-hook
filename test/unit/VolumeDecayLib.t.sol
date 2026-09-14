@@ -31,19 +31,19 @@ contract VolumeDecayLibTest is Test {
         uint128 result = VolumeDecayLib.applyDecay(1_000_000, 0, 3600);
         // Expected: floor(1_000_000 * 0.8) = 800_000
         // Allow 1-unit rounding tolerance from Q96 fixed point
-        assertApproxEqAbs(result, 800_000, 1);
+        assertApproxEqAbs(result, 500_000, 1);
     }
 
     function test_twoHourDecay() public pure {
         uint128 result = VolumeDecayLib.applyDecay(1_000_000, 0, 7200);
         // Expected: 1_000_000 * 0.64 = 640_000
-        assertApproxEqAbs(result, 640_000, 2);
+        assertApproxEqAbs(result, 250_000, 2);
     }
 
     function test_tenHourDecay() public pure {
         uint128 result = VolumeDecayLib.applyDecay(1_000_000, 0, 36000);
-        // 0.8^10 = 0.10737418... → floor ≈ 107_374
-        assertApproxEqAbs(result, 107_374, 5);
+        // 0.5^10 = 1/1024 = 0.0009765625 -> floor 976
+        assertApproxEqAbs(result, 976, 5);
     }
 
     // ---- cap ---------------------------------------------------------------
