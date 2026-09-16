@@ -1,0 +1,39 @@
+name: Contracts
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      robinhood_fork:
+        description: Run Robinhood mainnet fork tests using current public RPC state
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+      - run: forge fmt --check src test script
+      - run: forge build --skip test
+      - run: forge build --sizes --skip test --skip script
+      - run: forge test -vv
+  robinhood-fork:
+    if: github.event_name == 'workflow_dispatch' && inputs.robinhood_fork
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.5.1
+      - run: forge test --threads 1 --match-path 'test/fork/*.t.sol' -vv
+        env:
+          ROBINHOOD_RPC_URL: https://rpc.mainnet.chain.robinhood.com
