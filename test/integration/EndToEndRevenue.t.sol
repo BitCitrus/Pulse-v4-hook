@@ -104,10 +104,10 @@ contract EndToEndRevenueTest is PulseV4HookFixture {
             bool exactIn = ((seed >> 9) % 4) != 0; // ~25% exact-output
             uint256 size = 1e15 + ((seed >> 16) % 5e17);
 
-            // Exercise the whole gas-price fee curve, including the basefee == 0 branch.
+            // Exercise the priority-fee curve, including zero tip and basefee == 0.
             uint256 base = (seed >> 40) % 5;
             vm.fee(base == 0 ? 0 : base * 1 gwei);
-            vm.txGasPrice((1 + ((seed >> 48) % 40)) * 1 gwei);
+            vm.txGasPrice(block.basefee + ((seed >> 48) % 40) * 1 gwei);
             vm.roll(block.number + 1);
             if (i % 7 == 0) vm.warp(block.timestamp + 20 minutes);
 

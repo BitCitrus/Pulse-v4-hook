@@ -101,10 +101,9 @@ abstract contract PulseV4HookFixture is Test, Deployers {
     address trader = makeAddr("trader");
 
     function setUp() public virtual {
-        // Foundry's default test env has block.basefee == 0, which now means "not a real
-        // EIP-1559 chain" and skips the protocol fee entirely. Set a realistic base fee so
-        // tests reflect an actual EIP-1559 chain unless a test explicitly overrides it.
+        // Use a valid EIP-1559 transaction with zero tip unless a test overrides the fees.
         vm.fee(1 gwei);
+        vm.txGasPrice(1 gwei);
 
         // Deploy PoolManager + swapRouter/modifyLiquidityRouter via Deployers helper
         deployFreshManagerAndRouters();

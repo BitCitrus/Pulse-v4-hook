@@ -178,43 +178,55 @@ contract PulseV4HookTest is PulseV4HookFixture {
         }
     }
 
-    function test_swap_extraFee_scalesWithGasPriceRatio() public {
+    function test_swap_noTipAndTipFees_settleInAllDirections() public {
         _addLiquidity(1e21);
         PoolId id = poolKey.toId();
-
-        // baseFee == 0 disables the entire hook protocol fee.
-        vm.fee(0);
-        uint256 snapshot = vm.snapshotState();
-        vm.prank(trader);
-        swap(poolKey, false, -1e16, "");
-        uint256 feeAtRatio1 = hook.protocolRevenue0(id);
-
-        // Revert back and replay the identical swap, but with tx.gasprice = 5x block.basefee
-        vm.revertToState(snapshot);
         vm.fee(10 gwei);
-        vm.txGasPrice(50 gwei);
-        vm.prank(trader);
-        swap(poolKey, false, -1e16, "");
-        uint256 feeAtRatio5 = hook.protocolRevenue0(id);
+        uint256[6] memory gasPrices =
+            [uint256(10 gwei), 15 gwei, 20 gwei, 50 gwei, 300 gwei, 1000 gwei];
+        uint256[6] memory expectedPips = [uint256(100), 150, 200, 500, 3000, 3000];
 
-        assertGt(feeAtRatio5, feeAtRatio1);
+        for (uint256 i; i < gasPrices.length; i++) {
+            for (uint256 direction; direction < 4; direction++) {
+                uint256 snapshot = vm.snapshotState();
+                vm.txGasPrice(gasPrices[i]);
+                bool zeroForOne = direction < 2;
+                bool exactInput = direction % 2 == 0;
+                int256 specified = exactInput ? -int256(1e16) : int256(1e16);
+                vm.prank(trader);
+                BalanceDelta delta = swap(poolKey, zeroForOne, specified, "");
+
+                int256 input = zeroForOne ? int256(delta.amount0()) : int256(delta.amount1());
+                int256 output = zeroForOne ? int256(delta.amount1()) : int256(delta.amount0());
+                assertLt(input, 0);
+                assertGt(output, 0);
+                assertEq(exactInput ? input : output, specified);
+                bool feeInToken0 = zeroForOne != exactInput;
+                uint256 fee = feeInToken0 ? hook.protocolRevenue0(id) : hook.protocolRevenue1(id);
+                assertEq(feeInToken0 ? hook.protocolRevenue1(id) : hook.protocolRevenue0(id), 0);
+                uint256 gross = exactInput ? uint256(output) + fee : uint256(-input) - fee;
+                assertEq(fee, gross * expectedPips[i] / 1_000_000);
+                _assertClaimRevenue(poolKey);
+                assertTrue(vm.revertToState(snapshot));
+            }
+        }
     }
 
     function test_swap_extraFee_cappedAtMax() public {
         _addLiquidity(1e21);
         PoolId id = poolKey.toId();
 
-        // Absurd gas price ratio (1000x) must still clamp to HOOK_FEE_PIPS + MAX_EXTRA_PROTOCOL_FEE_PIPS
+        // Even an extreme tip must cap the entire protocol fee, including the fixed 1bp.
         vm.fee(1 gwei);
         vm.txGasPrice(1000 gwei);
         vm.prank(trader);
         BalanceDelta delta = swap(poolKey, false, -1e17, "");
 
         uint256 output = uint256(uint128(delta.amount0()));
-        uint256 maxTotalPips = 100 + 3000; // HOOK_FEE_PIPS + MAX_EXTRA_PROTOCOL_FEE_PIPS
+        uint256 maxTotalPips = 3000; // fixed 100 pips + at most 2900 extra pips
         uint256 maxExpectedFee = (output + hook.protocolRevenue0(id)) * maxTotalPips / 1_000_000;
 
-        assertLe(hook.protocolRevenue0(id), maxExpectedFee + 1); // +1 for rounding
+        assertEq(hook.protocolRevenue0(id), maxExpectedFee);
     }
 
     function test_swap_noProtocolFeeWhenBaseFeeIsZero() public {

@@ -161,10 +161,10 @@ contract NativeProtocolFeeTest is PulseV4HookFixture {
         assertEq(feeInNative ? fee1 : fee0, 0, "only the unspecified currency pays a fee");
         if (expectFee) {
             assertGt(fee, 0);
-            // At gasprice == basefee the charge is 200 pips on the core swap's
+            // At gasprice == basefee only the fixed 100 pips applies to the core swap's
             // unspecified amount, before deducting output fees or adding input fees.
             uint256 grossUnspecified = exactInput ? uint256(output) + fee : uint256(-input) - fee;
-            assertEq(fee, grossUnspecified * 200 / 1_000_000);
+            assertEq(fee, grossUnspecified * 100 / 1_000_000);
         } else {
             assertEq(fee, 0);
         }

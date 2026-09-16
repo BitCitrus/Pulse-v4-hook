@@ -30,13 +30,10 @@ library FeePolicy {
     {
         if (baseFee == 0) return 0;
         // Clamp the ratio before multiplying so even extreme supplied values are safe.
-        uint256 ratio = gasPrice / baseFee;
-        uint256 extra = ratio >= 30
-            ? HookConstants.MAX_EXTRA_PROTOCOL_FEE_PIPS
-            : FullMath.mulDiv(gasPrice, HookConstants.EXTRA_FEE_BASE_PIPS, baseFee);
-        return uint128(
-            uint256(amount) * (HookConstants.HOOK_FEE_PIPS + extra)
-                / HookConstants.PIPS_DENOMINATOR
-        );
+        uint256 feePips = gasPrice / baseFee
+            >= HookConstants.MAX_PROTOCOL_FEE_PIPS / HookConstants.HOOK_FEE_PIPS
+            ? HookConstants.MAX_PROTOCOL_FEE_PIPS
+            : FullMath.mulDiv(gasPrice, HookConstants.HOOK_FEE_PIPS, baseFee);
+        return uint128(uint256(amount) * feePips / HookConstants.PIPS_DENOMINATOR);
     }
 }

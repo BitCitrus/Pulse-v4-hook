@@ -86,7 +86,8 @@ contract ReviewExpectedBehaviorTest is PulseV4HookFixture {
             int256 baseAmount = baseIsToken0 ? int256(pool0) : int256(pool1);
             assertEq(hook.globalVolume(id), uint256(baseAmount < 0 ? -baseAmount : baseAmount));
             int256 unspecified = chargedIn0 ? int256(pool0) : int256(pool1);
-            uint256 fee = uint256(unspecified < 0 ? -unspecified : unspecified) * 200 / 1_000_000;
+            // Gas price equals the base fee, so only the fixed 1bp is charged.
+            uint256 fee = uint256(unspecified < 0 ? -unspecified : unspecified) * 100 / 1_000_000;
             assertGt(fee, 0);
             assertEq(hook.protocolRevenue0(id), chargedIn0 ? fee : 0);
             assertEq(hook.protocolRevenue1(id), chargedIn0 ? 0 : fee);
