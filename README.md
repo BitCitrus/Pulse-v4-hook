@@ -1,344 +1,118 @@
-# Pulse-v4-hook
+# PulseFee Hook
 
-Pulse-v4-hook is a Uniswap v4 hook project that combines two core ideas in a single pool strategy:
+**English** | [简体中文](README.zh-CN.md)
 
-1. **Dynamic LP fee driven by recent local trading activity**
-2. **A hook-managed shared 1-tick liquidity vault**
+PulseFee is a **Uniswap v4 dynamic-fee hook**. It adjusts a pool's LP fee using the distribution of recent trading volume across price ticks. Volume concentrated near the current price generally produces a lower fee; volume concentrated elsewhere produces a higher fee.
 
-The goal is to make LP capital highly concentrated around the current usable tick while dynamically lowering fees when recent nearby trading activity is strong, and raising fees when activity becomes sparse.
+The hook also collects a separate fee as project revenue. It supports ERC20/ERC20 and native-currency/ERC20 pools. LPs manage their positions through standard Uniswap v4 interfaces, while fee updates run automatically as part of swaps.
 
----
+## Features
 
-## 1. Project overview
+| Component | Behavior |
+|---|---|
+| Volume tracking | Each swap updates the pool's global volume and the usable tick bucket at the end of the swap, measured in the configured base token. |
+| Dynamic LP fee | Uses five nearby tick buckets, with a weight of three for the center bucket. |
+| Fee refresh | Starts at `MIN_FEE` on initialization, then recomputes on the first swap of each subsequent block. Later swaps with the same EVM-visible `block.number` reuse the cached fee. |
+| Revenue accounting | Accrues ERC-6909 claims inside PoolManager and records revenue separately for each pool and currency. |
+| Revenue withdrawal | The owner redeems accrued claims; PoolManager transfers the underlying assets directly to the recipient. |
+| Pause control | The owner can disable the additional hook fee while keeping LP fee calculation and swaps enabled. |
 
-This project is a Uniswap v4 hook for a dynamic-fee pool.
+## Dynamic LP fee
 
-It supports two liquidity paths in the same pool:
+Let `c` be the current usable tick, `s` the pool's `tickSpacing`, `V[t]` the decayed volume in tick bucket `t`, and `L` the decayed global volume:
 
-- **Normal Uniswap liquidity**: users can still add liquidity in the standard Uniswap way.
-- **1-tick vault liquidity**: users can deposit into a hook-managed shared vault that only makes markets in the current usable tick space.
+```text
+local = V[c-2s] + V[c-s] + 3*V[c] + V[c+s] + V[c+2s]
 
-The hook manages a shared vault that always attempts to place liquidity only in the current usable range:
+L == 0          -> MIN_FEE
+L > 0, local=0  -> MAX_FEE
+otherwise       -> clamp(floor(L * C / local), MIN_FEE, MAX_FEE)
+```
 
-- active range = `[tickLower, tickLower + tickSpacing]`
-- `tickLower = floor(currentTick / tickSpacing) * tickSpacing`
+Each swap contributes the absolute amount of the selected base token to two buckets: the global bucket and its final usable tick bucket. The usable tick is `floor(currentTick / tickSpacing) * tickSpacing`, including for negative ticks. A swap that crosses multiple ticks records its volume at the final bucket.
 
-When price moves out of the current active range, the vault becomes stale and marks itself as needing rebalance.
-A separate rebalance flow then:
+Volume halves at each elapsed UTC hour boundary. Updates and reads apply decay lazily; an elapsed interval of 90 hours or more explicitly returns zero. For example, volume recorded at 10:59 crosses its first decay boundary at 11:00. Stored volumes saturate at `uint128.max`.
 
-- removes stale liquidity
-- swaps inventory internally if needed
-- rebuilds liquidity in the final current tick space
+The signal measures **relative concentration**. Scaling all volume equally leaves the ratio unchanged, apart from rounding, saturation and cutoff effects. When all recent volume is in the center bucket, the raw fee is `floor(C / 3)`.
 
----
+### Example configuration
 
-## 2. Naming and design intention
+The defaults in [`.env.example`](.env.example) are:
 
-**Pulse-v4-hook** reflects two pillars:
+| Parameter | Value | Meaning |
+|---|---:|---|
+| `MIN_FEE` | 100 pips | 1 bp / 0.01% LP fee floor |
+| `MAX_FEE` | 3,000 pips | 30 bp / 0.30% LP fee ceiling |
+| `FEE_CONSTANT_C` | 300 | Scales the dynamic fee formula |
+| `TICK_SPACING` | 30 | Pool tick spacing, selected at pool creation |
+| `BASE_TOKEN_IS_TOKEN0` | `true` | Measures volume in token0 after currencies are sorted by address |
 
-- **PulseFee**: fee is based on recent local trading volume pulses
-- **NTick**: the vault only provides liquidity in one usable tick space at a time
+One pip is one part per million; **100 pips = 1 bp = 0.01%**. With `C = 300`, volume entirely in the center bucket gives `300 / 3 = 100` pips. The fee bounds, `C` and base-token selection are immutable per hook deployment and shared by its pools.
 
-This is not a generic passive LP vault. It is an actively managed hook-native liquidity system.
+## Additional hook fee
 
----
+This charge is separate from both the LP fee and Uniswap core's own protocol fee. When collection is enabled and `block.basefee > 0`:
 
-## 3. Dynamic fee model
+```text
+hookFeePips = min(3000, floor(100 * tx.gasprice / block.basefee))
+hookFee     = floor(abs(unspecifiedDelta) * hookFeePips / 1_000_000)
+```
 
-### 3.1 Volume state
+The fee applies to the output currency for exact-input swaps and to the input currency for exact-output swaps. With no priority fee (`tx.gasprice == block.basefee`), the fee is **1 bp**. A priority fee equal to the base fee makes the total **2 bp**. The total hook fee is capped at **30 bp / 0.30%**. Pausing collection or having `block.basefee == 0` makes this additional fee zero.
 
-The hook maintains:
+With the example LP fee ceiling of 30 bp, the two stated fee rates sum to at most **60 bp**. Each charge is calculated and rounded on its own fee basis.
 
-- `L`: exponentially decayed total recent volume, measured in a deployment-specified **base token**
-- `L_tick`: exponentially decayed recent volume for each **usable tick**
+Quote simulation and transaction execution need to account for the gas price dependency, since different transaction environments can produce different additional fees.
 
-Important rules:
+## Revenue custody and permissions
 
-- All volume accounting is measured in a single base token chosen at deployment.
-- Ticks are always **usable ticks**, not raw ticks.
-- Internal rebalance swaps performed by the hook **do not count** toward `L` or `L_tick`.
+During a swap, the hook calls `PoolManager.mint` to create ERC-6909 claims. The underlying assets remain inside PoolManager, and the hook's returned delta charges the swapper. For each currency, the hook's claim balance backs its combined revenue accounting across pools.
 
-### 3.2 Decay rule
+To withdraw revenue, the owner calls `withdrawProtocolRevenue`. The hook clears the pool's revenue accounting, opens a PoolManager unlock callback, burns the claims and transfers the underlying assets directly to the recipient. A failed withdrawal reverts the associated accounting and claim changes.
 
-Decay is hourly and exponential:
+Fee collection therefore needs no token transfer to the hook during a swap. Normal swap settlement and revenue withdrawals still depend on token transfer behavior. [BlacklistingToken.t.sol](test/integration/BlacklistingToken.t.sol) covers a token that rejects transfers specifically to the hook while claim-based fee collection continues to work.
 
-- every 1 hour, volume is multiplied by `0.8`
+The owner can pause or resume the additional fee, withdraw accrued revenue, and transfer or renounce ownership. The hook has no upgrade mechanism, holds no LP positions and exposes no owner function to withdraw LP principal. Swap callbacks accept empty `hookData`.
 
-This applies to both:
+## Build and test
 
-- global `L`
-- per-tick `L_tick`
+Use **Foundry v1.5.1** and **Solidity 0.8.26**. The repository targets Cancun with via IR enabled, 200 optimizer runs and 1,000 runs per fuzz test.
 
-Decay should be implemented lazily, not by updating storage every block.
-The intended behavior is:
+From the repository root:
 
-- compute elapsed full hours since last update
-- apply multiplier `0.8 ^ n`
-- then apply new observed volume
+```sh
+git submodule update --init --recursive
+forge fmt --check src test script
+forge build --skip test
+forge build --sizes --skip test --skip script
+forge test -vv
+```
 
-### 3.3 Fee formula
+Hook regression results: **81 tests passed**, with no failures or skips in those suites. The hook's deployed bytecode is **8,046 bytes**, below the 24,576-byte limit. Coverage includes native-currency settlement, ERC-6909 backing, withdrawal rollback, signed-amount boundaries, and 300 swaps across three pools sharing currencies followed by revenue withdrawals. Deployment tests cover shared configuration, price conversion, integer boundaries and CREATE2 planning. Opt-in [Robinhood fork tests](docs/robinhood.md) exercise the deployed Universal Router, PositionManager and Permit2, including hook-fee slippage checks.
 
-The dynamic fee is based on local trading activity around the current usable tick.
+[GitHub Actions](.github/workflows/contracts.yml) runs formatting, builds, size checks and the test suite on pushes and pull requests. See the [testing notes](docs/testing.md) and [gas measurements](test/gas/README.md) for details.
 
-Let the center usable tick be `t`.
-Then the local weighted volume denominator is:
+## Deployment and integration
 
-`sum = (L_tick[t] * 2) + L_tick[t-2] + L_tick[t-1] + L_tick[t+1] + L_tick[t+2]`
-(i.e., center tick has double weight, sum over ±2 usable tick range)
+Start with [`.env.example`](.env.example) and the [deployment guide](docs/launch.md). Supply the target chain's PoolManager, administrator and token addresses, and review the initial price and fee parameters. Preflight and Deploy share the same configuration and derive `sqrtPriceX96` from `PRICE_E18` when the explicit price is blank. Automatic derivation supports 0–18 token decimals; other formats use an explicit sorted `INITIAL_SQRT_PRICE`.
 
-The intended raw fee expression is:
+The deployment script mines the hook address with CREATE2 and initializes a pool. The address must have the required **`0x10C4` permission mask in its lowest 14 bits**, and the pool must use the dynamic-fee flag **`0x800000`**. Liquidity is added separately after initialization. On Robinhood, the fee cache follows the estimated L1 block number while volume decay follows timestamps. Ordinary transactions at `gasprice == basefee` pay a 1 bp hook fee; the ratio-based formula remains enabled. Uniswap frontend routing requires a separate [hook review](https://support.uniswap.org/hc/en-us/articles/48291859140621-Routing-for-hooked-pools).
 
-`rawFee = L * C / sum`
+## Model scope
 
-Then clamp it:
+The fee is derived from volume distribution around the current price. It does not directly classify ordinary trading versus arbitrage, or establish that LP profitability exceeds that of a fixed-fee pool. Tick spacing, volume distribution and decay all affect the signal; the example parameters remain subject to market-data validation.
 
-`fee = clamp(minFee, maxFee, rawFee)`
+Local tests cover the behaviors listed above. Target-chain configuration, routing integration and nonstandard token behavior require their own validation. See the [specification](SPEC.md) and [remaining work](TODO.md) for the current scope.
 
-Interpretation:
+## Further reading
 
-- if recent volume is concentrated near current price, `sum` is large, so fee goes **down**
-- if recent volume is sparse around current price, `sum` is small, so fee goes **up**
+The detailed documents below are currently in Chinese.
 
-### 3.4 Keeper volume update
-
-Keepers can periodically update the volume state via `updateVolume()`.
-Volume is tracked over a **wider ±7 tick range** to capture more trading activity.
-This wider range helps maintain volume data even when price moves around.
-
-### 3.5 Fee refresh model
-
-Dynamic fee is **pool-wide** and applies to the whole pool.
-It is not specific to vault LP only.
-
-Fee refresh should support keeper participation.
-The preferred architecture is:
-
-- store `cachedFee`
-- allow a public keeper function to refresh the cached fee
-- the hook uses `cachedFee` in swap flow
-
-A hybrid design is acceptable if later needed, but current preference is to make fee refreshing part of keeper incentives.
-
-### 3.5 Internal swap fee exemption
-
-When the hook performs an internal swap for vault rebalance:
-
-- it should **not** be charged the extra `1bp` hook fee
-- it should **not** contribute to volume accounting
-- it should ideally use **zero dynamic LP fee override** for that internal rebalance swap path
-
-This requires the hook / manager flow to distinguish internal rebalance swaps from user swaps.
-
----
-
-## 4. 1-tick vault model
-
-### 4.1 Shared vault
-
-The 1-tick liquidity system is a **shared vault**, not separate per-user isolated positions.
-
-Properties:
-
-- all users in the vault share one hook-managed liquidity position
-- the hook manages the active position
-- the hook rebalances the vault into the latest current usable tick space
-
-### 4.2 Position style
-
-Vault liquidity only makes market in the **current usable tick space**.
-
-That means there is only one active range at a time:
-
-- `[tickLower, tickLower + tickSpacing]`
-
-### 4.3 User receipt model
-
-The project wants a user experience similar to LP position NFTs.
-However, economically this vault behaves like a **shared share-based vault**.
-
-Recommended interpretation:
-
-- user receives an NFT-like position receipt
-- the receipt represents vault shares, not a unique isolated liquidity range
-
-In implementation, the exact token standard can still be finalized later, but the economic meaning is:
-
-- **shared vault shares with NFT-style receipt UX**
-
-### 4.4 Deposit behavior
-
-Users may still use normal Uniswap liquidity flows outside the vault.
-Separately, they may deposit into the 1-tick vault.
-
-For vault deposits:
-
-- hook should internally convert deposited assets toward the best ratio for the current active range
-- before deposit, vault must rebalance first if stale
-- deposit is **strict**: if rebalance fails, deposit reverts
-
-### 4.5 Withdraw behavior
-
-For vault withdrawals:
-
-- the system should attempt rebalance first
-- withdrawal is **lenient**: if rebalance fails, user can still withdraw based on current vault state
-
-This means:
-
-- deposit strict
-- withdraw lenient
-
-### 4.6 Capital usage objective
-
-Vault capital should be used as fully as reasonably possible in the active 1-tick range.
-The design target is to use almost all deployable capital, while tolerating small unavoidable dust.
-
----
-
-## 5. Rebalance model
-
-### 5.1 Public rebalance state
-
-The vault exposes a public state flag:
-
-- `needsRebalance`
-
-This is intentionally public so external keepers can observe it and participate.
-
-### 5.2 Rebalance trigger
-
-If swap ends in a different usable tick space than the vault’s active range, the hook marks vault state as stale.
-
-Preferred behavior:
-
-- swap path marks vault as needing rebalance
-- actual rebalance is done through a separate explicit rebalance entrypoint
-
-### 5.3 Rebalance action
-
-A rebalance should:
-
-1. remove stale liquidity
-2. inspect current vault inventory
-3. perform internal inventory-balancing swap if needed
-4. rebuild liquidity in the final current usable tick space
-
-### 5.4 Keeper incentives
-
-Rebalance is keeper-friendly.
-The protocol explicitly wants to incentivize external callers to trigger maintenance.
-
-Keeper reward source:
-
-- rewards are funded from protocol revenue collected through the extra `1bp` hook fee
-
-### 5.5 Rebalance fee treatment
-
-For internal rebalance swaps:
-
-- no extra `1bp` hook fee
-- no contribution to volume tracking
-- intended zero dynamic LP fee override for internal flow
-
----
-
-## 6. Fee and revenue model
-
-The protocol charges an extra **1bp hook fee** on normal user swaps.
-
-This revenue is used for protocol-side functions such as:
-
-- keeper incentives
-- maintenance incentives
-
-The 1-tick vault’s trading PnL, fee earnings, and rebalance costs belong economically to vault participants.
-
-Specifically:
-
-- vault trading fees belong to vault users
-- rebalance slippage and costs are borne by vault users
-- keeper incentives come from protocol 1bp revenue, not directly from vault assets
-
----
-
-## 7. Administrative powers
-
-The project only wants minimal admin control.
-
-Admin powers:
-
-- pause contract / pause critical flows
-
-Deployment-time constants should be fixed on-chain, rather than later tuned by admin, including for example:
-
-- `minFee`
-- `maxFee`
-- `C`
-- base token choice
-- decay parameters
-
----
-
-## 8. Manipulation stance
-
-The current design intentionally does **not** try to heavily suppress fee-shaping manipulation.
-
-Reasoning:
-
-- if someone pays real fees to increase recent local volume and thereby lower the local fee, that effect is public and benefits all subsequent flow in that region
-
-Therefore, the current design preference is:
-
-- no aggressive anti-manipulation clipping for now
-- no per-trade truncation just to suppress this behavior
-
-This can be revisited later if tests show pathological behavior.
-
----
-
-## 9. Main components to build
-
-Likely components include:
-
-- `Hook` contract implementing Uniswap v4 hook interfaces
-- `Vault` accounting logic for shared 1-tick LP
-- `RebalanceManager` or equivalent internal manager/router for privileged internal flows
-- `Keeper incentive` accounting module
-- NFT-style receipt contract for vault shares
-- libraries for decayed volume math and usable tick accounting
-
----
-
-## 10. Current agreed decisions summary
-
-The following have already been decided:
-
-- project name: `Pulse-v4-hook`
-- dynamic fee based on decayed `L` and decayed usable-tick `L_tick`
-- hourly decay factor = `0.8`
-- center usable tick has double weight
-- fee formula is inverse local-activity style: `L * C / localSum`, then clamp
-- volume measured in a deployment-specified base token
-- internal rebalance swaps do not count toward `L` / `L_tick`
-- internal rebalance swaps do not pay the extra `1bp` hook fee
-- pool-wide dynamic fee applies to the whole pool
-- normal Uniswap liquidity and vault liquidity both coexist
-- shared vault only provides liquidity in current usable tick space
-- `needsRebalance` is public
-- keeper rewards come from the extra `1bp` hook fee revenue
-- deposits are strict and must rebalance first
-- withdrawals are lenient if rebalance fails
-- admin can pause, but key parameters should be fixed at deployment
-
----
-
-## 11. What this README is for
-
-This README is meant to give Claude Code or any other coding agent enough context to understand:
-
-- what the protocol is
-- which decisions are already finalized
-- what architectural constraints matter
-- what must be preserved while implementing
-
-This file is a product/design handoff, not a finished technical spec.
+| Document | Contents |
+|---|---|
+| [Specification](SPEC.md) | Units, fee formulas, permissions and behavioral boundaries |
+| [Architecture](docs/refactor.md) | Modules, call boundaries and design decisions |
+| [Deployment and integration](docs/launch.md) | Configuration, deployment, frontend and indexer integration |
+| [Testing and verification](docs/testing.md) | Commands, coverage and results |
+| [Gas measurements](test/gas/README.md) | Benchmark methodology and results |
+| [Remaining work](TODO.md) | Outstanding implementation and validation work |
