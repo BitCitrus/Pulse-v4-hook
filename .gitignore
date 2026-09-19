@@ -1,18 +1,27 @@
-# Bytecode / artifacts
+# Foundry build output
 out/
-artifacts/
 cache/
+artifacts/
 
-# Environment files
+# Foundry script artifacts. Dry runs are pure noise; real broadcast records are kept so a
+# deployment stays reproducible and auditable.
+broadcast/*
+
+# Environment files — never commit a real key
 .env
 .env.local
 .env.*.local
 
-# Editor
+# Editors / tooling
+.claude/
 .idea/
 .vscode/
 *.swp
 *.swo
+
+# Remix IDE workspace artifacts
+.deps/
+remix.config.json
 
 # OS
 .DS_Store
@@ -21,6 +30,7 @@ Thumbs.db
 # Coverage
 coverage/
 coverage.json
+lcov.info
 
 # Tenderly
 tenderly/
@@ -28,8 +38,7 @@ tenderly/
 # Node (if any)
 node_modules/
 
-# Misc
-*.log
-
-# Claude Code
-.claude/
+# NOTE: do not add broad markdown patterns here. This file previously carried `*-*.md` and
+# `DE*.md`, which silently excluded DEPLOYMENT.md and REVIEW-2026-09-13.md — both linked from
+# README — so anyone cloning the repo got broken links and lost the audit record. Documentation
+# lives in the repo; exclude individual files by exact name if one ever needs to stay local.
